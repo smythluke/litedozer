@@ -1,0 +1,260 @@
+<html>
+	<head>
+		<title>LiteDozer</title>
+		<link rel="stylesheet" type="text/css" href="css/main.css">
+		<link rel='shortcut icon' type='image/png' href='img/litecoin.png' />
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/pusher/2.1.6/pusher.min.js"></script>
+		<script src="js/three.min.js"></script>
+		<script src="js/oimo.min.js"></script>
+		<script src="js/OrbitControls.js"></script>
+	</head>
+	<body>
+		<script>
+			var isMobile = false;
+			var antialias = true;
+			
+			// three var
+			var camera, scene, light, renderer, controls;
+			var meshs = [];
+			var grounds = [];
+			var lightcoinTexture, lightcoinMaterial, greyMaterial, matGround;
+			var buffgeoCylinder;
+			var ToRad = 0.0174532925199432957;
+			
+			//oimo var
+			var world = null;
+			var collisionGroups = {};
+			var bodys = null;
+			
+			// The Bit of a collision group
+			var group1 = 1 << 0;  // 00000000 00000000 00000000 00000001
+			var group2 = 1 << 1;  // 00000000 00000000 00000000 00000010
+			var group3 = 1 << 2;  // 00000000 00000000 00000000 00000100
+			var all = 0xffffffff; // 11111111 11111111 11111111 11111111
+			
+			// Is all the physics setting for rigidbody
+			var config = [
+				1, // The density of the shape.
+				0.4, // The coefficient of friction of the shape.
+				0.2, // The coefficient of restitution of the shape.
+				1, // The bits of the collision groups to which the shape belongs.
+				0xffffffff // The bits of the collision groups with which the shape collides.
+			];
+			
+			init();
+			loop();
+		
+			function init() {
+				var n = navigator.userAgent;
+				if (n.match(/Android/i) || n.match(/webOS/i) || n.match(/iPhone/i) || n.match(/iPad/i) || n.match(/iPod/i) || n.match(/BlackBerry/i) || n.match(/Windows Phone/i)){ isMobile = true;  antialias = false;}
+
+				camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 1, 100000 );
+				camera.position.set( 800, 400, 900 );
+				
+				controls = new THREE.OrbitControls(camera);
+				controls.target.set(0, 20, 0);
+				controls.update();
+				
+				scene = new THREE.Scene();
+				
+				renderer = new THREE.WebGLRenderer({ antialias:antialias });
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				document.body.appendChild( renderer.domElement );
+				
+				var materialType = 'MeshBasicMaterial';
+		
+				if(!isMobile){
+					scene.add( new THREE.AmbientLight( 0x3D4143 ) );
+					light = new THREE.DirectionalLight( 0xffffff , 1);
+					light.position.set( 300, 1000, 500 );
+					light.target.position.set( 0, 0, 0 );
+					light.castShadow = true;
+					var d = 300;
+					light.shadow.camera = new THREE.OrthographicCamera( -d, d, d, -d,  500, 1600 );
+					light.shadow.bias = 0.0001;
+					light.shadow.mapSize.width = light.shadow.mapSize.height = 1024;
+					scene.add( light );
+					materialType = 'MeshPhongMaterial';
+					renderer.shadowMap.enabled = true;
+					renderer.shadowMap.type = THREE.PCFShadowMap;//THREE.BasicShadowMap;
+				}
+				
+				// Add sphere around everything to give a background
+				var buffgeoBack = new THREE.IcosahedronBufferGeometry(8000,1);
+				var back = new THREE.Mesh( buffgeoBack, new THREE.MeshBasicMaterial( { color: 0x333345, side:THREE.BackSide, depthWrite: false } )); //make this a gradient to look better
+				back.geometry.applyMatrix(new THREE.Matrix4().makeRotationZ(15*ToRad));
+				scene.add( back );
+				
+				litecoinTexture = new THREE.TextureLoader().load( "img/litecoin.png" );
+				litecoinMaterial = new THREE[materialType]( { map: litecoinTexture, name:'ltcmat'} );
+				greyMaterial = new THREE[materialType]( { color: 0x3d3e3c, name:'gmat'} );
+				matGround = new THREE[materialType]( { color: 0x3D4143 } );
+				
+				// events
+				window.addEventListener( 'resize', onWindowResize, false );
+				
+				// physics
+				initOimoPhysics();
+			}
+
+			function loop() {
+				updateOimoPhysics();
+				controls.update();
+				renderer.render( scene, camera );
+				requestAnimationFrame( loop );
+			}
+			
+			function onWindowResize() {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+			}
+			
+			function clearMesh(){
+				var i=meshs.length;
+				while (i--) scene.remove(meshs[ i ]);
+				i = grounds.length;
+				while (i--) scene.remove(grounds[ i ]);
+				grounds = [];
+				meshs = [];
+			}
+			
+			// OIMO pyhsics start here
+			
+			function initOimoPhysics(){
+				world = new OIMO.World( {info:true, worldscale:100} );
+				world.gravity = new OIMO.Vec3(0, -1, 0);
+				populate(1);
+				//setInterval(updateOimoPhysics, 1000/60);
+			}
+			
+			function populate(n) {
+				
+				// reset old
+				clearMesh();
+				world.clear();
+				bodys = [];
+
+				//add ground to the physics world (oimo.js)
+				var ground = world.add({size:[1000, 20, 1000], pos:[0,0,0], rot:[0, 0, 0], config:config});
+				
+				//add ground to the rendered world (three.js)
+				var buffgeoBox = new THREE.BoxBufferGeometry( 1000, 20, 1000)
+				var mesh = new THREE.Mesh( buffgeoBox, matGround );
+				//mesh.position.set(0, 0, 0);
+				//mesh.rotation.set(0*ToRad, 0*ToRad, 0*ToRad);
+				mesh.castShadow = true;
+				mesh.receiveShadow = true;
+				scene.add( mesh );
+				grounds.push(mesh);
+				
+				var bodyLength = bodys.push(world.add({size:[50, 50, 50], pos:[-475, 35, -475], rot:[0, 0, 0], move:false, config:config}));
+				buffgeoBox = new THREE.BoxBufferGeometry(50, 50, 50)
+				var mesh = new THREE.Mesh( buffgeoBox, matGround );
+				mesh.position.set(-475, 35, -475);
+				//mesh.rotation.set(0*ToRad, 0*ToRad, 0*ToRad);
+				mesh.castShadow = true;
+				mesh.receiveShadow = true;
+				meshLength = meshs.push(mesh);
+				scene.add( meshs[meshLength-1] );
+			}
+			
+			function updateOimoPhysics() {
+				if(world == null) return;
+				world.step();
+				
+				var p, r, m, x, y, z;
+				var mtx = new THREE.Matrix4();
+				var i = bodys.length;
+				var mesh;
+				var body;
+				
+				
+				
+				while (i--){
+					// bodies are in the physics world
+					body = bodys[i];
+					// meshes are in the observable world
+					mesh = meshs[i];
+					if(!body.sleeping){
+						mesh.position.copy(body.getPosition());
+						mesh.quaternion.copy(body.getQuaternion());
+						// reset position
+						if(mesh.position.y<-1500){
+							meshs.forEach(function(item, index){if(item == mesh){meshs.splice(index, 1)}});
+							scene.children.forEach(function(item, index){if(item == mesh){scene.children.splice(index, 1)}});
+							bodys.forEach(function(item, index){if(item == body){bodys.splice(index, 1)}});
+						}
+					}
+				}
+				
+				clearer = grounds[1];
+				meshs.forEach(function(item, index){if(item == clearer){
+					console.log(item);
+				}});
+			}
+			
+			function addCoin(value){
+				var radius, depth, x, y, z;
+				
+				depth = 3;
+				radius = 12; // if its less than 1 leave it.
+				if (1 < value && value <= 10){
+					depth = 6;
+					radius = 24;
+				} else if (10 < value && value < 50){
+					depth = 9;
+					radius = 36;
+				} else if (50 < value && value < 150){
+					depth = 12;
+					radius = 48;
+				} else if (150 < value && value < 500){
+					depth = 25;
+					radius = 100;
+				} else if (500 < value){
+					depth = 50;
+					radius = 200;
+				}
+				
+				x = 0 + Math.random()*250 - 125;
+				y = 100 + Math.random()*500;
+				z = 0 + Math.random()*250 - 125;
+				
+				config[4] = all; //coins collide with everything
+				config[3] = group2; //coins are in group 2
+				
+				bodyLength = bodys.push(world.add({type:'cylinder', size:[radius, depth, radius], pos:[x,y,z], rot:[x, y, z], move:true, config:config }));
+				buffgeoCylinder = new THREE.CylinderBufferGeometry( radius, radius, depth, 40 );
+				
+				mesh = new THREE.Mesh(buffgeoCylinder, [greyMaterial, litecoinMaterial, litecoinMaterial]);
+				mesh.castShadow = true;
+				mesh.coins = value;
+				meshs.receiveShadow = true;
+				
+				meshLength = meshs.push(mesh);
+				scene.add( meshs[meshLength-1] );
+				
+			}
+			
+			// Subscribe to litecoin network and respond to each transaction
+			Pusher.host = 'slanger1.chain.so'; // our server
+			Pusher.ws_port = 443; // our server's port
+			Pusher.wss_port = 443; // ...
+
+			// create the pusher client connection
+			var pusher = new Pusher('e9f5cc20074501ca7395', { encrypted: true, disabledTransports: ['sockjs'], disableStats: true });
+
+			// subscribe to the channel for DOGE updates (new transactions only)
+			var ticker = pusher.subscribe('blockchain_update_ltc');
+
+			ticker.bind('tx_update', function(data) {
+				if (data.type == "tx") {
+				  addCoin(data.value.sent_value);
+				}
+			});
+		</script>
+	</body>
+</html>
+
+<!-- Run with python -m http.server 8080 -->
